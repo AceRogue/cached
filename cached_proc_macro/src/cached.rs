@@ -36,6 +36,8 @@ struct MacroArgs {
     create: Option<String>,
     #[darling(default)]
     result_fallback: bool,
+    #[darling(default)]
+    use_milli: bool,
 }
 
 pub fn cached(args: TokenStream, input: TokenStream) -> TokenStream {
@@ -95,6 +97,8 @@ pub fn cached(args: TokenStream, input: TokenStream) -> TokenStream {
     let (cache_key_ty, key_convert_block) =
         make_cache_key_type(&args.key, &args.convert, &args.ty, input_tys, &input_names);
 
+    let use_milli = args.use_milli;
+
     // make the cache type and create statement
     let (cache_ty, cache_create) = match (
         &args.unbound,
@@ -116,8 +120,11 @@ pub fn cached(args: TokenStream, input: TokenStream) -> TokenStream {
         }
         (false, None, Some(time), None, None, time_refresh) => {
             let cache_ty = quote! {cached::TimedCache<#cache_key_ty, #cache_value_ty>};
-            let cache_create =
-                quote! {cached::TimedCache::with_lifespan_and_refresh(#time, #time_refresh)};
+            let cache_create = if use_milli {
+                quote! {cached::TimedCache::with_lifespan_and_use_milli(#time, #time_refresh)}
+            } else {
+                quote! {cached::TimedCache::with_lifespan_and_refresh(#time, #time_refresh)}
+            };
             (cache_ty, cache_create)
         }
         (false, Some(size), Some(time), None, None, time_refresh) => {

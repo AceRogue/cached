@@ -37,6 +37,7 @@ pub struct TimedCache<K, V> {
     pub(super) misses: u64,
     pub(super) initial_capacity: Option<usize>,
     pub(super) refresh: bool,
+    pub(super) use_milli: bool,
 }
 
 impl<K: Hash + Eq, V> TimedCache<K, V> {
@@ -57,6 +58,7 @@ impl<K: Hash + Eq, V> TimedCache<K, V> {
             misses: 0,
             initial_capacity: Some(size),
             refresh: false,
+            use_milli: false,
         }
     }
 
@@ -71,6 +73,20 @@ impl<K: Hash + Eq, V> TimedCache<K, V> {
             misses: 0,
             initial_capacity: None,
             refresh,
+            use_milli: false,
+        }
+    }
+
+    /// Creates a new `TimedCache` with a specified lifespan which use millisecond as unit
+    pub fn with_lifespan_and_use_milli(milliseconds: u64, refresh: bool) -> TimedCache<K, V> {
+        TimedCache {
+            store: Self::new_store(None),
+            seconds: milliseconds,
+            hits: 0,
+            misses: 0,
+            initial_capacity: None,
+            refresh,
+            use_milli: true,
         }
     }
 
@@ -109,7 +125,7 @@ impl<K: Hash + Eq, V> TimedCache<K, V> {
     {
         let mut val = self.store.get_mut(key);
         if let Some(&mut (instant, _)) = val.as_mut() {
-            if instant.elapsed().as_secs() < self.seconds {
+            if Self::check_expire(instant, self.seconds, self.use_milli) {
                 if self.refresh {
                     *instant = Instant::now();
                 }
@@ -120,6 +136,11 @@ impl<K: Hash + Eq, V> TimedCache<K, V> {
         } else {
             Status::NotFound
         }
+    }
+
+    pub fn check_expire(instance: &Instant, expire: u64, use_milli: bool) -> bool {
+        let expire = if use_milli { expire * 1000 } else { expire };
+        instance.elapsed().as_millis() > expire as u128
     }
 }
 
@@ -171,7 +192,7 @@ impl<K: Hash + Eq, V> Cached<K, V> for TimedCache<K, V> {
     fn cache_get_or_set_with<F: FnOnce() -> V>(&mut self, key: K, f: F) -> &mut V {
         match self.store.entry(key) {
             Entry::Occupied(mut occupied) => {
-                if occupied.get().0.elapsed().as_secs() < self.seconds {
+                if Self::check_expire(&occupied.get().0, self.seconds, self.use_milli) {
                     if self.refresh {
                         occupied.get_mut().0 = Instant::now();
                     }
@@ -194,7 +215,7 @@ impl<K: Hash + Eq, V> Cached<K, V> for TimedCache<K, V> {
     fn cache_set(&mut self, key: K, val: V) -> Option<V> {
         let stamped = (Instant::now(), val);
         self.store.insert(key, stamped).and_then(|(instant, v)| {
-            if instant.elapsed().as_secs() < self.seconds {
+            if Self::check_expire(&instant, self.seconds, self.use_milli) {
                 Some(v)
             } else {
                 None
@@ -207,7 +228,7 @@ impl<K: Hash + Eq, V> Cached<K, V> for TimedCache<K, V> {
         Q: std::hash::Hash + Eq + ?Sized,
     {
         self.store.remove(k).and_then(|(instant, v)| {
-            if instant.elapsed().as_secs() < self.seconds {
+            if Self::check_expire(&instant, self.seconds, self.use_milli) {
                 Some(v)
             } else {
                 None
@@ -281,7 +302,7 @@ where
     {
         match self.store.entry(k) {
             Entry::Occupied(mut occupied) => {
-                if occupied.get().0.elapsed().as_secs() < self.seconds {
+                if Self::check_expire(&occupied.get().0, self.seconds, self.use_milli) {
                     if self.refresh {
                         occupied.get_mut().0 = Instant::now();
                     }
@@ -307,7 +328,7 @@ where
     {
         let v = match self.store.entry(k) {
             Entry::Occupied(mut occupied) => {
-                if occupied.get().0.elapsed().as_secs() < self.seconds {
+                if Self::check_expire(&occupied.get().0, self.seconds, self.use_milli) {
                     if self.refresh {
                         occupied.get_mut().0 = Instant::now();
                     }
